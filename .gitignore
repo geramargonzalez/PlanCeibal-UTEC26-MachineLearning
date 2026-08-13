@@ -1,0 +1,6 @@
+# Generated combined datasets (exceed GitHub's 100MB file size limit)
+DataSets/datos_estudiantes_total.csv
+DataSets/datos_estudiantes_total_clean.csv
+
+# OS / editor
+.DS_Store

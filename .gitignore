@@ -2,5 +2,8 @@
 DataSets/datos_estudiantes_total.csv
 DataSets/datos_estudiantes_total_clean.csv
 
+# Generated model artifacts (contain fitted parameters)
+artifacts/
+
 # OS / editor
 .DS_Store

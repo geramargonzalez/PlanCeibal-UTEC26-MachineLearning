@@ -21,4 +21,19 @@ El script [retrieve_csvs.py](Scripts/retrieve_csvs.py) se encarga de:
 
 ## Próximas secciones
 
-_Espacio reservado para futuras secciones (por ejemplo: análisis exploratorio, modelado, resultados, conclusiones)._
+## Modelo base: riesgo de baja actividad en CREA
+
+El primer modelo predice si un estudiante tendrá actividad total igual a cero en CREA durante el siguiente año lectivo. Está pensado para análisis de alcance y apoyo; no debe utilizarse para decisiones automatizadas sobre estudiantes.
+
+La implementación está en [Scripts/train_engagement_risk.py](Scripts/train_engagement_risk.py). Antes de ejecutarla, genere `datos_estudiantes_total_clean.csv` con [Scripts/retrieve_csvs.ipynb](Scripts/retrieve_csvs.ipynb) y prepare el entorno:
+
+```bash
+python3 -m pip install -r requirements.txt
+python3 Scripts/train_engagement_risk.py
+```
+
+El script valida que existan `id_persona`, `año_lectivo`, una métrica CREA compatible y estudiantes compartidos entre años consecutivos. Construye el objetivo un año adelante, excluye el identificador y las variables del año objetivo, y divide los datos de forma cronológica: años iniciales para entrenamiento, el año siguiente para seleccionar el umbral y el último año disponible para evaluación final.
+
+El preprocesamiento se ajusta exclusivamente con el conjunto de entrenamiento: imputación, indicadores de faltantes, codificación categórica y escalado. El modelo de referencia es una regresión logística balanceada y se compara con un clasificador de prevalencia. Al finalizar, guarda el pipeline, la lista de variables y las métricas agregadas en `artifacts/`, que no se versiona.
+
+La primera ejecución se detiene de forma explícita si los nombres de las métricas CREA cambian entre años. En ese caso, revise la salida de disponibilidad anual y actualice `ACTIVITY_CANDIDATES` en [Scripts/train_engagement_risk.py](Scripts/train_engagement_risk.py) con un mapeo validado antes de entrenar.

@@ -26,7 +26,6 @@ DATA_PATH = BASE_DIR / "DataSets" / "datos_estudiantes_total_clean.csv"
 ARTIFACTS_DIR = BASE_DIR / "artifacts"
 RANDOM_STATE = 42
 ACTIVITY_CANDIDATES = (
-    "cantidad_de_acciones_totales_en_crea",
     "cantidad_de_acciones_totales",
     "cantidad_de_días_ingreso_a_crea",
     "cantidad_de_dias_ingreso_a_crea",
@@ -56,6 +55,19 @@ def load_students() -> pd.DataFrame:
     return students.dropna(subset=["id_persona", "año_lectivo"]).copy()
 
 
+def describe_metric(students: pd.DataFrame, column: str) -> pd.DataFrame:
+    """Report per-year observation, spread, and zero counts for one metric."""
+    numeric = pd.to_numeric(students[column], errors="coerce")
+    grouped = numeric.groupby(students["año_lectivo"])
+    return pd.DataFrame(
+        {
+            "observed": grouped.count(),
+            "distinct": grouped.nunique(),
+            "zeros": grouped.apply(lambda values: int((values == 0).sum())),
+        }
+    ).sort_index()
+
+
 def choose_activity_column(students: pd.DataFrame) -> str:
     candidates = [column for column in ACTIVITY_CANDIDATES if column in students.columns]
     if not candidates:
@@ -64,26 +76,21 @@ def choose_activity_column(students: pd.DataFrame) -> str:
             "against the annual schema before training."
         )
 
-    availability = pd.DataFrame(
-        {
-            column: students.groupby("año_lectivo")[column].apply(
-                lambda values: pd.to_numeric(values, errors="coerce").notna().any()
-            )
-            for column in candidates
-        }
-    ).sort_index()
-    print("CREA metric availability by year:")
-    print(availability)
+    # Presence is not enough: a metric that is constant in a year cannot label it, and
+    # one without zeros yields no positive labels. Both happen when a year is missing
+    # the column and the gap gets filled instead of left as NA.
+    for column in candidates:
+        report = describe_metric(students, column)
+        print(f"\nCREA metric '{column}' by year:")
+        print(report)
+        if (report["distinct"] > 1).all() and (report["zeros"] > 0).all():
+            return column
 
-    canonical = next(
-        (column for column in candidates if availability[column].all()), None
+    raise ValueError(
+        "No CREA activity metric varies and reaches zero in every year, so no year "
+        "can supply both label classes. Reconcile the annual schemas and rebuild the "
+        "cleaned dataset without imputing values across years before training."
     )
-    if canonical is None:
-        raise ValueError(
-            "No single CREA activity metric is observed in every year. Reconcile "
-            "the annual schemas before training."
-        )
-    return canonical
 
 
 def build_cohort(students: pd.DataFrame, activity_column: str) -> pd.DataFrame:
@@ -212,7 +219,11 @@ def main() -> None:
     test = cohort[cohort["feature_year"] == test_year].copy()
     for name, frame in {"train": train, "validation": validation, "test": test}.items():
         if frame["engagement_risk"].nunique() < 2:
-            raise ValueError(f"{name} cohort has only one target class.")
+            label_years = sorted(int(year) for year in frame["label_year"].unique())
+            raise ValueError(
+                f"{name} cohort has only one target class. Check that "
+                f"'{activity_column}' is genuinely measured in label years {label_years}."
+            )
 
     model = build_pipeline(train, model_features)
     x_train, y_train = train[model_features], train["engagement_risk"]

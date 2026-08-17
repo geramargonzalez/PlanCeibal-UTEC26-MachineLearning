@@ -6,18 +6,22 @@ Este proyecto tiene como objetivo analizar los datos de estudiantes provistos po
 
 ## Limpieza de datos
 
-El script [retrieve_csvs.py](Scripts/retrieve_csvs.py) se encarga de:
+El notebook [retrieve_csvs.ipynb](Scripts/retrieve_csvs.ipynb) se encarga de:
 
+- Leer únicamente los extractos anuales (`datos_estudiantes_AAAA.csv`), sin incluir sus propias salidas.
 - Detectar automáticamente el delimitador de cada archivo CSV en `DataSets/`.
 - Estandarizar los nombres de columnas (minúsculas, sin espacios).
-- Combinar todos los datasets anuales en `datos_estudiantes_total.csv`.
+- Unificar los nombres que cambian entre años mediante `COLUMN_ALIASES`: el extracto 2025 agrega el sufijo `en CREA` a tres métricas que los años anteriores nombran sin sufijo.
+- Combinar todos los datasets anuales en `datos_estudiantes_total.csv` e informar la cobertura observada por año (`report_coverage`), de modo que un año sin una columna quede visible.
 - Limpiar el dataset combinado (`clean_combined_dataset`):
   - Elimina duplicados.
   - Normaliza texto y reemplaza valores nulos/desconocidos (`na`, `n/a`, `sin dato`, etc.) por `NA`.
   - Descarta filas sin `id_persona`.
   - Convierte columnas mayormente numéricas a tipo numérico.
-  - Completa valores numéricos faltantes con la mediana y valores de texto faltantes con `"unknown"`.
+  - Conserva los faltantes como `NA`: no se imputan aquí. Un año que nunca reportó una métrica debe seguir vacío, porque rellenarlo genera una constante que después se lee como una observación real. La imputación se ajusta sólo con el conjunto de entrenamiento del modelo.
   - Guarda el resultado en `datos_estudiantes_total_clean.csv`.
+
+Las columnas de PAM sólo existen en 2019-2022 y 2024; las de Matific se observan en aproximadamente la mitad de las filas de cada año.
 
 ## Próximas secciones
 
@@ -36,4 +40,4 @@ El script valida que existan `id_persona`, `año_lectivo`, una métrica CREA com
 
 El preprocesamiento se ajusta exclusivamente con el conjunto de entrenamiento: imputación, indicadores de faltantes, codificación categórica y escalado. El modelo de referencia es una regresión logística balanceada y se compara con un clasificador de prevalencia. Al finalizar, guarda el pipeline, la lista de variables y las métricas agregadas en `artifacts/`, que no se versiona.
 
-La primera ejecución se detiene de forma explícita si los nombres de las métricas CREA cambian entre años. En ese caso, revise la salida de disponibilidad anual y actualice `ACTIVITY_CANDIDATES` en [Scripts/train_engagement_risk.py](Scripts/train_engagement_risk.py) con un mapeo validado antes de entrenar.
+La selección de la métrica CREA no se limita a verificar que la columna exista: `choose_activity_column` exige que en cada año la métrica varíe y alcance el valor cero. Una métrica constante en un año no puede etiquetarlo, y una sin ceros no produce etiquetas positivas; ambos casos aparecen cuando un año carece de la columna y el hueco se rellena en lugar de dejarse en `NA`. Si ningún candidato cumple esa condición, el script se detiene e imprime el detalle anual (observaciones, valores distintos y ceros). En ese caso, reconcilie los nombres anuales en `COLUMN_ALIASES`, regenere el dataset limpio y recién entonces actualice `ACTIVITY_CANDIDATES` en [Scripts/train_engagement_risk.py](Scripts/train_engagement_risk.py).

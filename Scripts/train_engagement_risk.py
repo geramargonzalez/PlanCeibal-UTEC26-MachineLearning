@@ -35,7 +35,9 @@ ACTIVITY_CANDIDATES = (
 def most_frequent(values: pd.Series):
     """Return a deterministic representative categorical value."""
     values = values.dropna()
-    return values.mode().iloc[0] if not values.empty else pd.NA
+    # np.nan, not pd.NA: scikit-learn detects missing objects with ``X != X``, and
+    # pd.NA makes that comparison raise instead of returning a boolean mask.
+    return values.mode().iloc[0] if not values.empty else np.nan
 
 
 def load_students() -> pd.DataFrame:

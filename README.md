@@ -20,10 +20,13 @@ El notebook [retrieve_csvs.ipynb](Scripts/retrieve_csvs.ipynb) se encarga de:
   - Convierte columnas mayormente numéricas a tipo numérico.
   - **Resuelve conflictos `id_persona`+`año_lectivo`**: cuando un estudiante aparece 2 veces en el mismo año, si su identidad (sexo, departamento, ciclo, etc.) es consistente, suma sus métricas de actividad. Si difiere, descarta el par (probable error de identidad en la fuente).
   - **Agrega flags de outliers**: para métricas de actividad extrema (`cantidad_de_comentarios_posteados`, `cantidad_de_acciones_totales`, `cantidad_de_actividades_finalizadas_en_pam`), marca valores por encima del percentil 99.5 con una columna booleana `<columna>_outlier`.
+  - **Normaliza `grado`**: la columna se representa con 3 notaciones distintas según subsistema (1º vs 1 vs 1ero.). Post-limpieza se normalizan con sufijos: `1_p` (primaria), `1_c` (ciclo básico), `1_t` (técnica). Las categorías de educación especial se conservan literales.
   - Conserva los faltantes como `NA`: no se imputan aquí. Un año que nunca reportó una métrica debe seguir vacío, porque rellenarlo genera una constante que después se lee como una observación real. La imputación se ajusta sólo con el conjunto de entrenamiento del modelo.
   - Guarda el resultado en `datos_estudiantes_total_clean.csv`.
 
 **Cobertura estructural por subsistema**: Las columnas `zona`, `contexto` y las métricas de Matific (`cantidad_de_días_de_ingreso_a_matific`, `cantidad_de_episodios_finalizados_en_matific`) son exclusivas de educación primaria (`subsistema == "dgeip"`) — están presentes en el 100% de esas filas y ausentes en el 100% de las demás. Esto no es un faltante aleatorio sino un patrón estructural: primaria utiliza estos sistemas mientras que ciclo básico y educación media no. Las columnas de PAM sólo existen en 2019-2022 y 2024; faltan completamente en 2023 y 2025.
+
+**Outliers investigados**: Se detectaron 179 registros con actividades PAM >10,000 (media 457 actividades/día) y 200+ registros con comentarios/acciones extremas. Los outliers se preservan, se marcan con flags `_outlier` para análisis posterior. Se sospecha que PAM cuenta granularmente (ejercicios, intentos) generando inflación; recomendado investigar con equipo PAM. Comentarios y acciones extremas (13,819 comentarios, 45,705 acciones) son plausibles para usuarios muy activos/moderadores.
 
 ## Próximas secciones
 

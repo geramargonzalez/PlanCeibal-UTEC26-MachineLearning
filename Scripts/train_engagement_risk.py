@@ -185,6 +185,45 @@ def select_threshold(y_true: pd.Series, probabilities: np.ndarray) -> float:
     )
 
 
+def time_series_cross_validate(
+    cohort: pd.DataFrame, model_features: list[str], dev_years: list[int]
+) -> list[dict]:
+    """Walk-forward CV: fold k trains on dev_years[:k], validates on dev_years[k].
+
+    A random K-fold would shuffle rows across years, letting a model trained
+    partly on 2022 validate against 2020 — leaking future information into a
+    "past" fold. Expanding the training window forward in time keeps every
+    fold honest about what a real deployment would have known at that point.
+    """
+    fold_results = []
+    for i in range(1, len(dev_years)):
+        cv_train_years = dev_years[:i]
+        cv_val_year = dev_years[i]
+        cv_train = cohort[cohort["feature_year"].isin(cv_train_years)]
+        cv_val = cohort[cohort["feature_year"] == cv_val_year]
+
+        if cv_train["engagement_risk"].nunique() < 2 or cv_val["engagement_risk"].nunique() < 2:
+            print(f"  Skipping fold train={cv_train_years} val={cv_val_year}: only one class present")
+            continue
+
+        fold_model = build_pipeline(cv_train, model_features)
+        fold_model.fit(cv_train[model_features], cv_train["engagement_risk"])
+        probabilities = fold_model.predict_proba(cv_val[model_features])[:, 1]
+        predictions = (probabilities >= 0.5).astype(int)
+
+        fold_results.append(
+            {
+                "train_years": [int(year) for year in cv_train_years],
+                "val_year": int(cv_val_year),
+                "roc_auc": float(roc_auc_score(cv_val["engagement_risk"], probabilities)),
+                "pr_auc": float(average_precision_score(cv_val["engagement_risk"], probabilities)),
+                "f1_at_0.5": float(f1_score(cv_val["engagement_risk"], predictions, zero_division=0)),
+            }
+        )
+
+    return fold_results
+
+
 def main() -> None:
     students = load_students()
     print("Rows and unique students by year:")
@@ -227,6 +266,34 @@ def main() -> None:
                 f"'{activity_column}' is genuinely measured in label years {label_years}."
             )
 
+    # Cross-validate on the development years only (everything before the held-out
+    # test year) to get a variance-aware estimate of generalization before the
+    # single final fit. The test year stays untouched by any of these folds.
+    dev_years = [int(year) for year in train_years] + [int(validation_year)]
+    print(f"\nCross-validation (walk-forward, dev years={dev_years}):")
+    cv_results = time_series_cross_validate(cohort, model_features, dev_years)
+    for fold in cv_results:
+        print(
+            f"  train={fold['train_years']} val={fold['val_year']}: "
+            f"ROC-AUC={fold['roc_auc']:.3f} PR-AUC={fold['pr_auc']:.3f} F1@0.5={fold['f1_at_0.5']:.3f}"
+        )
+    cv_roc_aucs = [fold["roc_auc"] for fold in cv_results]
+    cv_pr_aucs = [fold["pr_auc"] for fold in cv_results]
+    cv_summary = {
+        "folds": cv_results,
+        "roc_auc_mean": float(np.mean(cv_roc_aucs)) if cv_roc_aucs else None,
+        "roc_auc_std": float(np.std(cv_roc_aucs)) if cv_roc_aucs else None,
+        "pr_auc_mean": float(np.mean(cv_pr_aucs)) if cv_pr_aucs else None,
+        "pr_auc_std": float(np.std(cv_pr_aucs)) if cv_pr_aucs else None,
+    }
+    if cv_roc_aucs:
+        print(
+            f"  CV mean ROC-AUC: {cv_summary['roc_auc_mean']:.3f} ± {cv_summary['roc_auc_std']:.3f}"
+        )
+        print(
+            f"  CV mean PR-AUC:  {cv_summary['pr_auc_mean']:.3f} ± {cv_summary['pr_auc_std']:.3f}"
+        )
+
     model = build_pipeline(train, model_features)
     x_train, y_train = train[model_features], train["engagement_risk"]
     x_validation, y_validation = validation[model_features], validation["engagement_risk"]
@@ -253,6 +320,7 @@ def main() -> None:
         "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
         "dummy_pr_auc": float(average_precision_score(y_test, dummy_probabilities)),
         "activity_column": activity_column,
+        "cross_validation": cv_summary,
     }
     print(json.dumps(metrics, indent=2))
 

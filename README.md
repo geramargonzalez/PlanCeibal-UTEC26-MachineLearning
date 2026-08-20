@@ -14,14 +14,16 @@ El notebook [retrieve_csvs.ipynb](Scripts/retrieve_csvs.ipynb) se encarga de:
 - Unificar los nombres que cambian entre años mediante `COLUMN_ALIASES`: el extracto 2025 agrega el sufijo `en CREA` a tres métricas que los años anteriores nombran sin sufijo.
 - Combinar todos los datasets anuales en `datos_estudiantes_total.csv` e informar la cobertura observada por año (`report_coverage`), de modo que un año sin una columna quede visible.
 - Limpiar el dataset combinado (`clean_combined_dataset`):
-  - Elimina duplicados.
-  - Normaliza texto y reemplaza valores nulos/desconocidos (`na`, `n/a`, `sin dato`, etc.) por `NA`.
+  - Elimina duplicados exactos.
+  - Normaliza texto y reemplaza valores nulos/desconocidos (`na`, `n/a`, `sin dato`, `sin datos`, `sin clasificar`, etc.) por `NA`.
   - Descarta filas sin `id_persona`.
   - Convierte columnas mayormente numéricas a tipo numérico.
+  - **Resuelve conflictos `id_persona`+`año_lectivo`**: cuando un estudiante aparece 2 veces en el mismo año, si su identidad (sexo, departamento, ciclo, etc.) es consistente, suma sus métricas de actividad. Si difiere, descarta el par (probable error de identidad en la fuente).
+  - **Agrega flags de outliers**: para métricas de actividad extrema (`cantidad_de_comentarios_posteados`, `cantidad_de_acciones_totales`, `cantidad_de_actividades_finalizadas_en_pam`), marca valores por encima del percentil 99.5 con una columna booleana `<columna>_outlier`.
   - Conserva los faltantes como `NA`: no se imputan aquí. Un año que nunca reportó una métrica debe seguir vacío, porque rellenarlo genera una constante que después se lee como una observación real. La imputación se ajusta sólo con el conjunto de entrenamiento del modelo.
   - Guarda el resultado en `datos_estudiantes_total_clean.csv`.
 
-Las columnas de PAM sólo existen en 2019-2022 y 2024; las de Matific se observan en aproximadamente la mitad de las filas de cada año.
+**Cobertura estructural por subsistema**: Las columnas `zona`, `contexto` y las métricas de Matific (`cantidad_de_días_de_ingreso_a_matific`, `cantidad_de_episodios_finalizados_en_matific`) son exclusivas de educación primaria (`subsistema == "dgeip"`) — están presentes en el 100% de esas filas y ausentes en el 100% de las demás. Esto no es un faltante aleatorio sino un patrón estructural: primaria utiliza estos sistemas mientras que ciclo básico y educación media no. Las columnas de PAM sólo existen en 2019-2022 y 2024; faltan completamente en 2023 y 2025.
 
 ## Próximas secciones
 

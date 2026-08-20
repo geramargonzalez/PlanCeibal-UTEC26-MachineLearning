@@ -258,6 +258,7 @@ def main() -> None:
     train = cohort[cohort["feature_year"].isin(train_years)].copy()
     validation = cohort[cohort["feature_year"] == validation_year].copy()
     test = cohort[cohort["feature_year"] == test_year].copy()
+
     for name, frame in {"train": train, "validation": validation, "test": test}.items():
         if frame["engagement_risk"].nunique() < 2:
             label_years = sorted(int(year) for year in frame["label_year"].unique())

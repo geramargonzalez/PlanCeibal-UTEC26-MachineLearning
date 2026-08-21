@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from joblib import dump
+from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
 from sklearn.impute import SimpleImputer
@@ -30,6 +31,17 @@ ACTIVITY_CANDIDATES = (
     "cantidad_de_días_ingreso_a_crea",
     "cantidad_de_dias_ingreso_a_crea",
 )
+# Cohort keys plus everything derived from the label year. Anything measured in the
+# label year is the answer, not a feature.
+EXCLUDED_COLUMNS = frozenset(
+    {
+        "id_persona",
+        "feature_year",
+        "label_year",
+        "next_year_crea_activity",
+        "engagement_risk",
+    }
+)
 
 
 def most_frequent(values: pd.Series):
@@ -40,21 +52,32 @@ def most_frequent(values: pd.Series):
     return values.mode().iloc[0] if not values.empty else np.nan
 
 
-def load_students() -> pd.DataFrame:
-    if not DATA_PATH.exists():
-        raise FileNotFoundError(f"Create the cleaned dataset first: {DATA_PATH}")
+def normalize_keys(students: pd.DataFrame) -> pd.DataFrame:
+    """Cast the cohort keys and drop rows that cannot be keyed.
 
-    students = pd.read_csv(DATA_PATH, low_memory=False, dtype={"id_persona": "string"})
+    Split out of ``load_students`` so a caller already holding the cleaned frame in
+    memory (the notebook) gets exactly the same keys as the script without paying
+    for a second read of a 500MB CSV.
+    """
     required_columns = {"id_persona", "año_lectivo"}
     missing_columns = required_columns - set(students.columns)
     if missing_columns:
         raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
 
+    students = students.copy()
     students["id_persona"] = students["id_persona"].astype("string").str.strip()
     students["año_lectivo"] = pd.to_numeric(
         students["año_lectivo"], errors="coerce"
     ).astype("Int64")
-    return students.dropna(subset=["id_persona", "año_lectivo"]).copy()
+    return students.dropna(subset=["id_persona", "año_lectivo"])
+
+
+def load_students() -> pd.DataFrame:
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(f"Create the cleaned dataset first: {DATA_PATH}")
+
+    students = pd.read_csv(DATA_PATH, low_memory=False, dtype={"id_persona": "string"})
+    return normalize_keys(students)
 
 
 def describe_metric(students: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -108,9 +131,16 @@ def build_cohort(students: pd.DataFrame, activity_column: str) -> pd.DataFrame:
     aggregation = {column: "mean" for column in numeric_columns}
     aggregation.update({column: most_frequent for column in categorical_columns})
 
-    student_year = students.groupby(["id_persona", "año_lectivo"], as_index=False).agg(
-        aggregation
-    )
+    # The cleaning step (``resolve_id_year_conflicts``) already collapses duplicate
+    # id_persona+año_lectivo pairs, so this groupby normally sees 4.5M singleton groups
+    # and runs a Python ``most_frequent`` per categorical column on each — ~29 minutes
+    # spent reproducing its own input. Aggregate only when there is something to merge.
+    key_columns = ["id_persona", "año_lectivo"]
+    if students.duplicated(key_columns).any():
+        student_year = students.groupby(key_columns, as_index=False).agg(aggregation)
+    else:
+        student_year = students[key_columns + list(aggregation)].reset_index(drop=True)
+
     student_year["label_year"] = student_year["año_lectivo"] + 1
     next_year_activity = student_year[
         ["id_persona", "año_lectivo", activity_column]
@@ -130,7 +160,39 @@ def build_cohort(students: pd.DataFrame, activity_column: str) -> pd.DataFrame:
     return cohort
 
 
-def build_pipeline(train: pd.DataFrame, model_features: list[str]) -> Pipeline:
+def select_model_features(cohort: pd.DataFrame) -> list[str]:
+    """Model inputs: everything except the keys, the target, and constant columns.
+
+    The identifier and every column derived from the label year are excluded — keeping
+    ``next_year_crea_activity`` would hand the model the answer. Constant columns are
+    dropped by measurement rather than by name (``rol`` is 100% "estudiante"), so a
+    column that goes constant in a future extract is caught without editing this list.
+    """
+    model_features = [
+        column for column in cohort.columns if column not in EXCLUDED_COLUMNS
+    ]
+    constant_features = [
+        column for column in model_features if cohort[column].nunique(dropna=False) <= 1
+    ]
+    if constant_features:
+        print(f"Dropping constant features (no signal): {constant_features}")
+        model_features = [
+            column for column in model_features if column not in constant_features
+        ]
+    if not model_features:
+        raise ValueError("No usable model features remain after exclusions.")
+    return model_features
+
+
+def build_pipeline(
+    train: pd.DataFrame, model_features: list[str], estimator=None
+) -> Pipeline:
+    """Impute/encode/scale on the training frame, then fit ``estimator``.
+
+    ``estimator`` defaults to the balanced logistic regression baseline. Passing one
+    lets the notebook compare several classifiers over identical preprocessing, so a
+    metric gap reflects the model and not a different feature matrix.
+    """
     numeric_features = [
         column for column in model_features if pd.api.types.is_numeric_dtype(train[column])
     ]
@@ -165,15 +227,15 @@ def build_pipeline(train: pd.DataFrame, model_features: list[str]) -> Pipeline:
     if not transformers:
         raise ValueError("No usable model features remain.")
 
+    if estimator is None:
+        estimator = LogisticRegression(
+            max_iter=500, class_weight="balanced", random_state=RANDOM_STATE
+        )
+
     return Pipeline(
         [
             ("preprocessor", ColumnTransformer(transformers)),
-            (
-                "classifier",
-                LogisticRegression(
-                    max_iter=500, class_weight="balanced", random_state=RANDOM_STATE
-                ),
-            ),
+            ("classifier", clone(estimator)),
         ]
     )
 
@@ -186,7 +248,10 @@ def select_threshold(y_true: pd.Series, probabilities: np.ndarray) -> float:
 
 
 def time_series_cross_validate(
-    cohort: pd.DataFrame, model_features: list[str], dev_years: list[int]
+    cohort: pd.DataFrame,
+    model_features: list[str],
+    dev_years: list[int],
+    model_factory=None,
 ) -> list[dict]:
     """Walk-forward CV: fold k trains on dev_years[:k], validates on dev_years[k].
 
@@ -194,7 +259,16 @@ def time_series_cross_validate(
     partly on 2022 validate against 2020 — leaking future information into a
     "past" fold. Expanding the training window forward in time keeps every
     fold honest about what a real deployment would have known at that point.
+
+    ``model_factory(train_frame, model_features)`` returns an unfitted pipeline and
+    defaults to ``build_pipeline``. It takes the training frame rather than a bare
+    estimator so a model needing its own preprocessing — gradient boosting reads
+    ordinal categories and native NaN instead of scaled one-hot columns — can be
+    compared over the same folds.
     """
+    if model_factory is None:
+        model_factory = build_pipeline
+
     fold_results = []
     for i in range(1, len(dev_years)):
         cv_train_years = dev_years[:i]
@@ -206,7 +280,7 @@ def time_series_cross_validate(
             print(f"  Skipping fold train={cv_train_years} val={cv_val_year}: only one class present")
             continue
 
-        fold_model = build_pipeline(cv_train, model_features)
+        fold_model = model_factory(cv_train, model_features)
         fold_model.fit(cv_train[model_features], cv_train["engagement_risk"])
         probabilities = fold_model.predict_proba(cv_val[model_features])[:, 1]
         predictions = (probabilities >= 0.5).astype(int)
@@ -246,14 +320,7 @@ def main() -> None:
     if len(cohort_years) < 3:
         raise ValueError(f"Need three valid feature years; found {cohort_years}")
     train_years, validation_year, test_year = cohort_years[:-2], cohort_years[-2], cohort_years[-1]
-    excluded = {
-        "id_persona",
-        "feature_year",
-        "label_year",
-        "next_year_crea_activity",
-        "engagement_risk",
-    }
-    model_features = [column for column in cohort.columns if column not in excluded]
+    model_features = select_model_features(cohort)
 
     train = cohort[cohort["feature_year"].isin(train_years)].copy()
     validation = cohort[cohort["feature_year"] == validation_year].copy()

@@ -1,11 +1,7 @@
 {
-	"folders": [
-		{
-			"path": "../../../../Library/CloudStorage/GoogleDrive-gerardo.gonzalez@estudiantes.utec.edu.uy/My Drive/EducacionProjectUTEC"
-		},
-		{
-			"path": ".."
-		}
-	],
-	"settings": {}
+    "folders": [
+        {
+            "path": ".."
+        }
+    ]
 }

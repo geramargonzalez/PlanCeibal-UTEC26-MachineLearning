@@ -1,5 +1,7 @@
 """Train a chronological baseline for next-year zero-CREA-activity risk."""
 
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
@@ -252,6 +254,7 @@ def time_series_cross_validate(
     model_features: list[str],
     dev_years: list[int],
     model_factory=None,
+    max_train_samples: int | None = None,
 ) -> list[dict]:
     """Walk-forward CV: fold k trains on dev_years[:k], validates on dev_years[k].
 
@@ -279,6 +282,9 @@ def time_series_cross_validate(
         if cv_train["engagement_risk"].nunique() < 2 or cv_val["engagement_risk"].nunique() < 2:
             print(f"  Skipping fold train={cv_train_years} val={cv_val_year}: only one class present")
             continue
+
+        if max_train_samples and len(cv_train) > max_train_samples:
+            cv_train = cv_train.sample(n=max_train_samples, random_state=RANDOM_STATE)
 
         fold_model = model_factory(cv_train, model_features)
         fold_model.fit(cv_train[model_features], cv_train["engagement_risk"])

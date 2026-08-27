@@ -345,7 +345,9 @@ def main() -> None:
     # single final fit. The test year stays untouched by any of these folds.
     dev_years = [int(year) for year in train_years] + [int(validation_year)]
     print(f"\nCross-validation (walk-forward, dev years={dev_years}):")
-    cv_results = time_series_cross_validate(cohort, model_features, dev_years)
+    cv_results = time_series_cross_validate(
+        cohort, model_features, dev_years, max_train_samples=200_000
+    )
     for fold in cv_results:
         print(
             f"  train={fold['train_years']} val={fold['val_year']}: "
